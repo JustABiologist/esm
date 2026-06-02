@@ -8,8 +8,11 @@ serializable field.
 from __future__ import annotations
 
 import importlib
+import ast
+import inspect
 import json
 import os
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 
@@ -197,6 +200,39 @@ def test_input_without_pocket_keeps_empty_pocket_features(
     assert features["disto_cond_mask"].sum().item() == 0
 
 
+def test_esmfold2_forward_explicitly_accepts_pocket_conditioning_inputs() -> None:
+    """The model must not silently swallow conditioning tensors via **kwargs."""
+    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    signature = inspect.signature(ESMFold2Model.forward)
+    for name in ("pocket_feature", "disto_cond", "disto_cond_mask"):
+        assert name in signature.parameters, (
+            f"ESMFold2Model.forward must explicitly accept {name!r}; "
+            "otherwise local pocket conditioning can be silently ignored."
+        )
+        assert signature.parameters[name].kind is not inspect.Parameter.VAR_KEYWORD
+
+
+def test_esmfold2_forward_source_uses_pocket_conditioning_inputs() -> None:
+    """Static guardrail: explicit inputs must be read in the forward body."""
+    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(ESMFold2Model.forward)))
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))
+    body_names = {
+        node.id
+        for statement in function.body
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Name)
+    }
+
+    for name in ("pocket_feature", "disto_cond", "disto_cond_mask"):
+        assert name in body_names, (
+            f"ESMFold2Model.forward declares {name!r} but does not read it "
+            "in the executable body."
+        )
+
+
 @pytest.mark.esmfold2_inference
 @pytest.mark.skipif(
     os.environ.get("ESMFOLD2_RUN_INFERENCE") != "1",
@@ -241,3 +277,63 @@ def test_local_esmfold2_inference_with_fkbp12_fk506_pocket(
     assert "_atom_site." in mmcif
     assert expected["expected_inference_behavior"]["mmcif_must_contain_ligand_ccd"] in mmcif
     assert len(mmcif) > 1000
+
+
+@pytest.mark.esmfold2_inference
+@pytest.mark.skipif(
+    os.environ.get("ESMFOLD2_RUN_INFERENCE") != "1",
+    reason="Set ESMFOLD2_RUN_INFERENCE=1 to run the local ESMFold2 inference test.",
+)
+def test_local_esmfold2_inference_changes_when_pocket_conditioning_changes(
+    fkbp12_fk506_input: tuple[StructurePredictionInput, dict],
+) -> None:
+    """Same seed/input should differ when pocket conditioning is removed."""
+    import torch
+    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    from esm.models.esmfold2 import ESMFold2InputBuilder
+
+    spi, _ = fkbp12_fk506_input
+    no_pocket = StructurePredictionInput(sequences=spi.sequences)
+
+    model_id = os.environ.get("ESMFOLD2_MODEL_ID", "biohub/ESMFold2")
+    device_name = os.environ.get(
+        "ESMFOLD2_DEVICE", "cuda" if torch.cuda.is_available() else "cpu"
+    )
+    device = torch.device(device_name)
+    if device.type == "cuda":
+        assert torch.cuda.is_available(), "ESMFOLD2_DEVICE=cuda but CUDA is unavailable"
+
+    model = ESMFold2Model.from_pretrained(model_id).to(device).eval()
+    builder = ESMFold2InputBuilder(ccd_cache=os.environ.get("ESMFOLD2_CCD_CACHE"))
+    pocket_features, _ = builder.prepare_input(spi, seed=0, device=device)
+    no_pocket_features, _ = builder.prepare_input(no_pocket, seed=0, device=device)
+
+    assert pocket_features["disto_cond_mask"].any()
+    assert not no_pocket_features["disto_cond_mask"].any()
+
+    forward_kwargs = dict(
+        num_loops=int(os.environ.get("ESMFOLD2_TEST_NUM_LOOPS", "1")),
+        num_sampling_steps=int(os.environ.get("ESMFOLD2_TEST_NUM_SAMPLING_STEPS", "4")),
+        num_diffusion_samples=1,
+        early_exit=False,
+    )
+
+    with torch.inference_mode():
+        torch.manual_seed(123)
+        pocket_output = model(**pocket_features, **forward_kwargs)
+        torch.manual_seed(123)
+        no_pocket_output = model(**no_pocket_features, **forward_kwargs)
+
+    changed = False
+    for key in ("distogram_logits", "sample_atom_coords"):
+        assert key in pocket_output
+        assert key in no_pocket_output
+        changed = changed or not torch.allclose(
+            pocket_output[key], no_pocket_output[key], atol=1e-5, rtol=1e-5
+        )
+
+    assert changed, (
+        "Pocket conditioning had no numerical effect on local ESMFold2 inference. "
+        "This usually means the tensors were prepared but not consumed by the model."
+    )
