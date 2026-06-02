@@ -53,6 +53,9 @@ addopts = """
 	-n auto
 	--ignore=tests/oss_pytests/test_oss_client.py
 """
+markers = [
+  "esmfold2_inference: runs local ESMFold2 model inference; opt in with ESMFOLD2_RUN_INFERENCE=1",
+]
 
 [tool.setuptools]
 package-dir = {"" = "."}
