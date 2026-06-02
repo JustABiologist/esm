@@ -19,6 +19,7 @@ from esm.utils.structure.molecular_complex import (
     MolecularComplexMetadata,
     MolecularComplexResult,
 )
+from esm.models.esmfold2_pocket_model import ESMFold2PocketConditionedModel
 
 __all__ = [
     "ChainInfo",
@@ -27,6 +28,7 @@ __all__ = [
     "DNAInput",
     "ELEMENT_NUMBER_TO_SYMBOL",
     "ESMFold2InputBuilder",
+    "ESMFold2PocketConditionedModel",
     "LigandInput",
     "MSA",
     "Modification",

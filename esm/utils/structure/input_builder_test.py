@@ -1,5 +1,6 @@
 """Round-trip tests for serialize/deserialize StructurePredictionInput."""
 
+import inspect
 import json
 from dataclasses import asdict
 
@@ -102,7 +103,9 @@ def test_roundtrip_full_with_conditioning() -> None:
             ProteinInput(id="A", sequence="MAKL"),
             ProteinInput(id="B", sequence="MAKM"),
         ],
-        pocket=PocketConditioning(binder_chain_id="A", contacts=[("B", 0), ("B", 2)]),
+        pocket=PocketConditioning(
+            binder_chain_id="A", contacts=[("B", 0, 3.4), ("B", 2, 4.1)]
+        ),
         distogram_conditioning=[
             DistogramConditioning(
                 chain_id="A", distogram=np.arange(16).reshape(4, 4).astype(np.float32)
@@ -126,7 +129,7 @@ def test_roundtrip_full_with_conditioning() -> None:
     assert restored.pocket is not None
     assert restored.pocket.binder_chain_id == "A"
     # Tuples survive the round-trip even though JSON only has lists.
-    assert restored.pocket.contacts == [("B", 0), ("B", 2)]
+    assert restored.pocket.contacts == [("B", 0, 3.4), ("B", 2, 4.1)]
     assert restored.distogram_conditioning is not None
     np.testing.assert_array_equal(
         restored.distogram_conditioning[0].distogram,
@@ -135,6 +138,16 @@ def test_roundtrip_full_with_conditioning() -> None:
     assert restored.covalent_bonds is not None
     assert spi.covalent_bonds is not None
     assert asdict(restored.covalent_bonds[0]) == asdict(spi.covalent_bonds[0])
+
+
+def test_pocket_conditioning_public_type_requires_contact_distances() -> None:
+    source = inspect.getsource(PocketConditioning)
+    without_three_field_tuple = source.replace("tuple[str, int, float]", "")
+
+    assert "tuple[str, int]" not in without_three_field_tuple, (
+        "PocketConditioning.contacts must not advertise distance-free two-field "
+        "contacts; each contact is a residue-level soft distance hint."
+    )
 
 
 def test_unsupported_sequence_type_raises() -> None:

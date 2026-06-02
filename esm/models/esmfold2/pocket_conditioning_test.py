@@ -87,6 +87,25 @@ def _artifact_output_dir() -> Path:
     return Path(os.environ.get("ESMFOLD2_TEST_OUTPUT_DIR", DEFAULT_OUTPUT_DIR))
 
 
+def _pocket_conditioned_model_class():
+    esmfold2 = importlib.import_module("esm.models.esmfold2")
+    assert hasattr(esmfold2, "ESMFold2PocketConditionedModel"), (
+        "esm.models.esmfold2 must expose a repo-owned "
+        "ESMFold2PocketConditionedModel class/wrapper for local pocket conditioning."
+    )
+    return esmfold2.ESMFold2PocketConditionedModel
+
+
+def _esmfold2_non_test_source() -> str:
+    source_dir = REPO_ROOT / "esm" / "models" / "esmfold2"
+    chunks = []
+    for path in sorted(source_dir.glob("*.py")):
+        if path.name.endswith("_test.py"):
+            continue
+        chunks.append(f"# {path.relative_to(REPO_ROOT)}\n{path.read_text()}")
+    return "\n\n".join(chunks)
+
+
 def _chain_token_indices(complex_obj, chain_id: str) -> list[int]:
     return [
         i
@@ -221,6 +240,7 @@ def offline_ccd(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest)
 def test_pocket_conditioning_is_public_esmfold2_api() -> None:
     esmfold2 = importlib.import_module("esm.models.esmfold2")
     assert hasattr(esmfold2, "PocketConditioning")
+    assert hasattr(esmfold2, "ESMFold2PocketConditionedModel")
 
 
 def test_fkbp12_fk506_pocket_fixture_round_trips(
@@ -355,6 +375,35 @@ def test_prepare_input_encodes_per_residue_soft_distance_hints(
     assert len(set(observed_bins)) > 1
 
 
+def test_prepare_input_masks_only_explicit_residue_ligand_distance_pairs(
+    fkbp12_fk506_input: tuple[StructurePredictionInput, dict],
+) -> None:
+    spi, expected = fkbp12_fk506_input
+    features, chains = prepare_esmfold2_input(spi)
+    chain_by_id = {chain.chain_id: chain for chain in chains}
+    protein_asym = chain_by_id[expected["protein_chain_id"]].asym_id
+    ligand_asym = chain_by_id[expected["ligand_chain_id"]].asym_id
+    contact_residue_indices = set(expected["contact_residue_indices_zero_based"])
+
+    contact_token_indices = [
+        i
+        for i, (asym_id, residue_index) in enumerate(
+            zip(features["asym_id"].tolist(), features["residue_index"].tolist())
+        )
+        if asym_id == protein_asym and residue_index in contact_residue_indices
+    ]
+    ligand_token_indices = [
+        i for i, asym_id in enumerate(features["asym_id"].tolist()) if asym_id == ligand_asym
+    ]
+
+    mask = features["disto_cond_mask"]
+    expected_pair_count = 2 * len(contact_token_indices) * len(ligand_token_indices)
+
+    assert int(mask.sum().item()) == expected_pair_count
+    assert not mask[contact_token_indices][:, contact_token_indices].any().item()
+    assert not mask[ligand_token_indices][:, ligand_token_indices].any().item()
+
+
 def test_invalid_pocket_binder_chain_id_raises(
     fkbp12_fk506_input: tuple[StructurePredictionInput, dict],
 ) -> None:
@@ -394,6 +443,19 @@ def test_invalid_pocket_contact_distance_raises(
         prepare_esmfold2_input(bad)
 
 
+def test_distance_free_two_field_pocket_contact_raises(
+    fkbp12_fk506_input: tuple[StructurePredictionInput, dict],
+) -> None:
+    spi, _ = fkbp12_fk506_input
+    bad = replace(
+        spi,
+        pocket=PocketConditioning(binder_chain_id="L", contacts=[("A", 25)]),
+    )
+
+    with pytest.raises(ValueError, match="3|distance|angstrom"):
+        prepare_esmfold2_input(bad)
+
+
 def test_input_without_pocket_keeps_empty_pocket_features(
     fkbp12_fk506_input: tuple[StructurePredictionInput, dict],
 ) -> None:
@@ -407,12 +469,11 @@ def test_input_without_pocket_keeps_empty_pocket_features(
 
 def test_esmfold2_forward_explicitly_accepts_pocket_conditioning_inputs() -> None:
     """The model must not silently swallow conditioning tensors via **kwargs."""
-    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
-
-    signature = inspect.signature(ESMFold2Model.forward)
+    model_cls = _pocket_conditioned_model_class()
+    signature = inspect.signature(model_cls.forward)
     for name in ("pocket_feature", "disto_cond", "disto_cond_mask"):
         assert name in signature.parameters, (
-            f"ESMFold2Model.forward must explicitly accept {name!r}; "
+            f"ESMFold2PocketConditionedModel.forward must explicitly accept {name!r}; "
             "otherwise local pocket conditioning can be silently ignored."
         )
         assert signature.parameters[name].kind is not inspect.Parameter.VAR_KEYWORD
@@ -420,9 +481,8 @@ def test_esmfold2_forward_explicitly_accepts_pocket_conditioning_inputs() -> Non
 
 def test_esmfold2_forward_source_uses_pocket_conditioning_inputs() -> None:
     """Static guardrail: explicit inputs must be read in the forward body."""
-    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
-
-    tree = ast.parse(textwrap.dedent(inspect.getsource(ESMFold2Model.forward)))
+    model_cls = _pocket_conditioned_model_class()
+    tree = ast.parse(textwrap.dedent(inspect.getsource(model_cls.forward)))
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))
     body_names = {
         node.id
@@ -433,16 +493,15 @@ def test_esmfold2_forward_source_uses_pocket_conditioning_inputs() -> None:
 
     for name in ("pocket_feature", "disto_cond", "disto_cond_mask"):
         assert name in body_names, (
-            f"ESMFold2Model.forward declares {name!r} but does not read it "
+            f"ESMFold2PocketConditionedModel.forward declares {name!r} but does not read it "
             "in the executable body."
         )
 
 
 def test_esmfold2_pocket_conditioning_is_not_fixed_hidden_state_ramp() -> None:
     """Pocket hints should use model-owned conditioning, not an arbitrary constant ramp."""
-    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
-
-    source = textwrap.dedent(inspect.getsource(ESMFold2Model.forward))
+    model_cls = _pocket_conditioned_model_class()
+    source = textwrap.dedent(inspect.getsource(model_cls.forward))
     forbidden_snippets = (
         "pocket_basis",
         "pocket_pair_bias",
@@ -452,7 +511,55 @@ def test_esmfold2_pocket_conditioning_is_not_fixed_hidden_state_ramp() -> None:
     for snippet in forbidden_snippets:
         assert snippet not in source, (
             "Pocket conditioning must not be implemented as a hard-coded hidden-state "
-            f"ramp/bias; found {snippet!r} in ESMFold2Model.forward."
+            f"ramp/bias; found {snippet!r} in ESMFold2PocketConditionedModel.forward."
+        )
+
+
+def test_esmfold2_package_import_does_not_monkeypatch_transformers_forward() -> None:
+    """Clean conditioning must live in a local model path, not an import side effect."""
+    source = _esmfold2_non_test_source()
+    forbidden_snippets = (
+        "apply_esmfold2_pocket_conditioning_patch",
+        "ESMFold2Model.forward =",
+        "setattr(ESMFold2Model, \"forward\"",
+        "_esm_repo_pocket_conditioning",
+    )
+
+    for snippet in forbidden_snippets:
+        assert snippet not in source, (
+            "Pocket conditioning must not monkeypatch the global Transformers "
+            f"ESMFold2Model.forward path; found {snippet!r}."
+        )
+
+
+def test_pocket_conditioning_forward_path_does_not_mutate_private_run_loop() -> None:
+    """The implementation should not replace private model methods during forward."""
+    source = _esmfold2_non_test_source()
+    forbidden_snippets = (
+        "self._run_one_loop =",
+        "original_run_one_loop",
+    )
+
+    for snippet in forbidden_snippets:
+        assert snippet not in source, (
+            "Pocket conditioning must be wired through an explicit local wrapper or "
+            f"subclass path, not by mutating _run_one_loop; found {snippet!r}."
+        )
+
+
+def test_pocket_feature_is_not_promoted_to_fake_zero_bin_distance_pairs() -> None:
+    """Only explicit residue-ligand disto_cond_mask pairs may carry distance hints."""
+    source = _esmfold2_non_test_source()
+    forbidden_snippets = (
+        "token_pair_mask = pocket_tokens[:, :, None] | pocket_tokens[:, None, :]",
+        "hint_mask | token_pair_mask",
+        "torch.zeros_like(hint_mask, dtype=torch.long)",
+    )
+
+    for snippet in forbidden_snippets:
+        assert snippet not in source, (
+            "pocket_feature may mark residues for bookkeeping, but it must not create "
+            f"implicit zero-bin distance constraints; found {snippet!r}."
         )
 
 
@@ -477,11 +584,11 @@ def test_local_esmfold2_inference_with_fkbp12_fk506_pocket(
 ) -> None:
     """Run a real local ESMFold2 inference smoke test with pocket conditioning."""
     import torch
-    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
 
     from esm.models.esmfold2 import ESMFold2InputBuilder
 
     spi, expected = fkbp12_fk506_input
+    model_cls = _pocket_conditioned_model_class()
     model_id = os.environ.get("ESMFOLD2_MODEL_ID", "biohub/ESMFold2")
     device_name = os.environ.get(
         "ESMFOLD2_DEVICE", "cuda" if torch.cuda.is_available() else "cpu"
@@ -492,7 +599,7 @@ def test_local_esmfold2_inference_with_fkbp12_fk506_pocket(
 
     model = builder = result = None
     try:
-        model = ESMFold2Model.from_pretrained(model_id).to(device).eval()
+        model = model_cls.from_pretrained(model_id).to(device).eval()
         builder = ESMFold2InputBuilder(ccd_cache=os.environ.get("ESMFOLD2_CCD_CACHE"))
 
         result = builder.fold(
@@ -512,6 +619,11 @@ def test_local_esmfold2_inference_with_fkbp12_fk506_pocket(
         assert "_atom_site." in mmcif
         assert expected["expected_inference_behavior"]["mmcif_must_contain_ligand_ccd"] in mmcif
         assert len(mmcif) > 1000
+        assert spi.pocket is not None
+
+        artifact = _write_inference_artifacts("smoke", result, spi.pocket)
+        assert Path(artifact["mmcif"]).exists()
+        assert Path(artifact["metrics"]).exists()
     finally:
         del result
         del builder
@@ -529,13 +641,13 @@ def test_local_esmfold2_inference_changes_when_pocket_conditioning_changes(
 ) -> None:
     """Same seed/input should differ when pocket conditioning is removed."""
     import torch
-    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
 
     from esm.models.esmfold2 import ESMFold2InputBuilder
 
     spi, _ = fkbp12_fk506_input
     no_pocket = StructurePredictionInput(sequences=spi.sequences)
 
+    model_cls = _pocket_conditioned_model_class()
     model_id = os.environ.get("ESMFOLD2_MODEL_ID", "biohub/ESMFold2")
     device_name = os.environ.get(
         "ESMFOLD2_DEVICE", "cuda" if torch.cuda.is_available() else "cpu"
@@ -555,7 +667,7 @@ def test_local_esmfold2_inference_changes_when_pocket_conditioning_changes(
         "unconditioned": None,
     }
     try:
-        model = ESMFold2Model.from_pretrained(model_id).to(device).eval()
+        model = model_cls.from_pretrained(model_id).to(device).eval()
         builder = ESMFold2InputBuilder(ccd_cache=os.environ.get("ESMFOLD2_CCD_CACHE"))
         pocket_features, pocket_chains = builder.prepare_input(spi, seed=0, device=device)
         no_pocket_features, no_pocket_chains = builder.prepare_input(

@@ -22,8 +22,8 @@ export ESMCFOLD_CCD_PATH="${ESMCFOLD_CCD_PATH:-$MODEL_DIR/ccd.pkl}"
 export ESMFOLD2_DEVICE="${ESMFOLD2_DEVICE:-cpu}"
 export PYTORCH_ENABLE_MPS_FALLBACK="${PYTORCH_ENABLE_MPS_FALLBACK:-1}"
 
-"$PYTHON" "$ROOT/tools/patch_esmfold2_pocket_conditioning.py"
-
 # Disable xdist so only one ESMFold2 model is resident at a time.
-"$PYTHON" -m pytest -q --no-cov -n 0 \
-  "$ROOT/esm/models/esmfold2/pocket_conditioning_test.py" "$@"
+"$PYTHON" -m pytest -q --no-cov -p no:cacheprovider -n 0 \
+  "$ROOT/esm/models/esmfold2/pocket_conditioning_test.py" \
+  "$ROOT/esm/utils/structure/input_builder_test.py" \
+  "$@"

@@ -58,7 +58,7 @@ class DistogramConditioning:
 @dataclass
 class PocketConditioning:
     binder_chain_id: str
-    contacts: list[tuple[str, int]]
+    contacts: list[tuple[str, int, float]]
 
 
 @dataclass

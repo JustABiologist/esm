@@ -10,7 +10,7 @@ import math
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field
-from numbers import Integral
+from numbers import Integral, Real
 
 import numpy as np
 import torch
@@ -1288,6 +1288,47 @@ def compute_distogram_conditioning(
     return disto_cond, disto_cond_mask
 
 
+def _bin_pocket_distance(
+    distance: float,
+    min_dist: float = 2.0,
+    max_dist: float = 22.0,
+    num_bins: int = 64,
+) -> int:
+    bin_width = (max_dist - min_dist) / num_bins
+    distance_bin = math.floor((distance - min_dist) / bin_width)
+    return max(0, min(num_bins - 1, distance_bin))
+
+
+def _parse_pocket_contact(raw_contact) -> tuple[str, int, float]:
+    try:
+        contact_chain_id, residue_index, target_distance = raw_contact
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Pocket conditioning contacts must be residue-level distance hints "
+            "(chain_id, residue_index, target_distance_angstrom)"
+        ) from None
+
+    if not isinstance(residue_index, Integral):
+        raise ValueError(
+            "Pocket conditioning contact residue index for chain "
+            f"{contact_chain_id!r} must be an integer, got {residue_index!r}"
+        )
+
+    if not isinstance(target_distance, Real):
+        raise ValueError(
+            "Pocket conditioning contact distance must be a finite positive "
+            f"angstrom value, got {target_distance!r}"
+        )
+    target_distance = float(target_distance)
+    if not math.isfinite(target_distance) or target_distance <= 0.0:
+        raise ValueError(
+            "Pocket conditioning contact distance must be a finite positive "
+            f"angstrom value, got {target_distance!r}"
+        )
+
+    return str(contact_chain_id), int(residue_index), target_distance
+
+
 def apply_pocket_conditioning(
     input: StructurePredictionInput,
     chains: list[ChainInfo],
@@ -1295,11 +1336,11 @@ def apply_pocket_conditioning(
     disto_cond: torch.Tensor,
     disto_cond_mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Materialize experimental ligand-pocket conditioning features.
+    """Materialize experimental residue-level ligand-pocket distance hints.
 
     This intentionally does not create covalent bonds or validate a docking
-    pose. For this first local implementation, each specified pocket residue
-    token is conditioned against every token in the binder chain.
+    pose. Each specified residue-level target distance is softly encoded
+    against every token in the binder chain; ligand atoms are not user-definable.
     """
     n_tokens = len(tokens)
     pocket_feature = torch.zeros(n_tokens, dtype=torch.long)
@@ -1335,13 +1376,9 @@ def apply_pocket_conditioning(
         residue_indices_by_asym[token.asym_id].add(token.residue_index)
 
     for raw_contact in input.pocket.contacts:
-        try:
-            contact_chain_id, residue_index = raw_contact
-        except (TypeError, ValueError):
-            raise ValueError(
-                "Pocket conditioning contacts must be "
-                "(chain_id, residue_index) pairs"
-            ) from None
+        contact_chain_id, residue_index, target_distance = _parse_pocket_contact(
+            raw_contact
+        )
 
         contact_chain = chain_by_id.get(contact_chain_id)
         if contact_chain is None:
@@ -1351,13 +1388,6 @@ def apply_pocket_conditioning(
                 f"({available_chain_ids})"
             )
 
-        if not isinstance(residue_index, Integral):
-            raise ValueError(
-                "Pocket conditioning contact residue index for chain "
-                f"{contact_chain_id!r} must be an integer, got "
-                f"{residue_index!r}"
-            )
-        residue_index = int(residue_index)
         if residue_index < 0:
             raise ValueError(
                 "Pocket conditioning contact residue index for chain "
@@ -1384,13 +1414,19 @@ def apply_pocket_conditioning(
                 f"{valid_msg}"
             )
 
+        target_distance_bin = _bin_pocket_distance(target_distance)
+
         for contact_token_index in contact_token_indices:
             pocket_feature[contact_token_index] = 1
             for binder_token_index in binder_token_indices:
                 if contact_token_index == binder_token_index:
                     continue
-                disto_cond[contact_token_index, binder_token_index] = 0
-                disto_cond[binder_token_index, contact_token_index] = 0
+                disto_cond[contact_token_index, binder_token_index] = (
+                    target_distance_bin
+                )
+                disto_cond[binder_token_index, contact_token_index] = (
+                    target_distance_bin
+                )
                 disto_cond_mask[contact_token_index, binder_token_index] = True
                 disto_cond_mask[binder_token_index, contact_token_index] = True
 
