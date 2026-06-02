@@ -42,6 +42,33 @@ def _seed_context(seed: int | None):
             torch.cuda.set_rng_state_all(cuda_state)
 
 
+def _match_cpu_lm_projection_dtype(model: Any) -> None:
+    """Keep local CPU ESMC hidden states compatible with the projection shim."""
+    try:
+        device = model.device
+    except AttributeError:
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            return
+    if device.type != "cpu":
+        return
+
+    esmc = getattr(model, "_esmc", None)
+    language_model = getattr(model, "language_model", None)
+    if esmc is None or language_model is None:
+        return
+
+    try:
+        esmc_dtype = next(esmc.parameters()).dtype
+        language_model_dtype = next(language_model.parameters()).dtype
+    except StopIteration:
+        return
+
+    if esmc_dtype == torch.bfloat16 and language_model_dtype == torch.float32:
+        language_model.to(dtype=torch.bfloat16)
+
+
 def clean_esmfold2_input(input: StructurePredictionInput) -> StructurePredictionInput:
     """Group identical protein sequences into the same ProteinInput with multiple ids.
 
@@ -135,6 +162,7 @@ def clean_esmfold2_input(input: StructurePredictionInput) -> StructurePrediction
 
     return StructurePredictionInput(
         sequences=cleaned_sequences,
+        pocket=input.pocket,
         distogram_conditioning=input.distogram_conditioning,
         covalent_bonds=input.covalent_bonds,
     )
@@ -323,6 +351,7 @@ class ESMFold2InputBuilder:
         features, chain_infos = self.prepare_input(
             input, seed=seed, device=model.device
         )
+        _match_cpu_lm_projection_dtype(model)
 
         sampler_kwargs: dict[str, Any] = {}
         if noise_scale is not None:

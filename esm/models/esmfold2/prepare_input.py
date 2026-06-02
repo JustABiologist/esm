@@ -10,6 +10,7 @@ import math
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field
+from numbers import Integral
 
 import numpy as np
 import torch
@@ -1287,6 +1288,115 @@ def compute_distogram_conditioning(
     return disto_cond, disto_cond_mask
 
 
+def apply_pocket_conditioning(
+    input: StructurePredictionInput,
+    chains: list[ChainInfo],
+    tokens: list[TokenInfo],
+    disto_cond: torch.Tensor,
+    disto_cond_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Materialize experimental ligand-pocket conditioning features.
+
+    This intentionally does not create covalent bonds or validate a docking
+    pose. For this first local implementation, each specified pocket residue
+    token is conditioned against every token in the binder chain.
+    """
+    n_tokens = len(tokens)
+    pocket_feature = torch.zeros(n_tokens, dtype=torch.long)
+    if input.pocket is None:
+        return pocket_feature
+
+    chain_by_id = {c.chain_id: c for c in chains}
+    available_chain_ids = ", ".join(repr(c.chain_id) for c in chains)
+
+    binder_chain_id = input.pocket.binder_chain_id
+    binder_chain = chain_by_id.get(binder_chain_id)
+    if binder_chain is None:
+        raise ValueError(
+            "Pocket conditioning binder_chain_id "
+            f"{binder_chain_id!r} does not match any input chain ID "
+            f"({available_chain_ids})"
+        )
+
+    binder_token_indices = [
+        t.token_index for t in tokens if t.asym_id == binder_chain.asym_id
+    ]
+    if not binder_token_indices:
+        raise ValueError(
+            "Pocket conditioning binder_chain_id "
+            f"{binder_chain_id!r} does not contain any tokens"
+        )
+
+    tokens_by_chain_res: dict[tuple[int, int], list[int]] = defaultdict(list)
+    residue_indices_by_asym: dict[int, set[int]] = defaultdict(set)
+    for token in tokens:
+        key = (token.asym_id, token.residue_index)
+        tokens_by_chain_res[key].append(token.token_index)
+        residue_indices_by_asym[token.asym_id].add(token.residue_index)
+
+    for raw_contact in input.pocket.contacts:
+        try:
+            contact_chain_id, residue_index = raw_contact
+        except (TypeError, ValueError):
+            raise ValueError(
+                "Pocket conditioning contacts must be "
+                "(chain_id, residue_index) pairs"
+            ) from None
+
+        contact_chain = chain_by_id.get(contact_chain_id)
+        if contact_chain is None:
+            raise ValueError(
+                "Pocket conditioning contact chain_id "
+                f"{contact_chain_id!r} does not match any input chain ID "
+                f"({available_chain_ids})"
+            )
+
+        if not isinstance(residue_index, Integral):
+            raise ValueError(
+                "Pocket conditioning contact residue index for chain "
+                f"{contact_chain_id!r} must be an integer, got "
+                f"{residue_index!r}"
+            )
+        residue_index = int(residue_index)
+        if residue_index < 0:
+            raise ValueError(
+                "Pocket conditioning contact residue index for chain "
+                f"{contact_chain_id!r} must be non-negative, got {residue_index}"
+            )
+
+        contact_token_indices = tokens_by_chain_res.get(
+            (contact_chain.asym_id, residue_index)
+        )
+        if not contact_token_indices:
+            valid_residue_indices = sorted(
+                residue_indices_by_asym.get(contact_chain.asym_id, set())
+            )
+            if valid_residue_indices:
+                valid_msg = (
+                    f"valid residue index range is "
+                    f"{valid_residue_indices[0]}..{valid_residue_indices[-1]}"
+                )
+            else:
+                valid_msg = "chain has no residue tokens"
+            raise ValueError(
+                "Pocket conditioning contact residue index "
+                f"{residue_index} was not found in chain {contact_chain_id!r}; "
+                f"{valid_msg}"
+            )
+
+        for contact_token_index in contact_token_indices:
+            pocket_feature[contact_token_index] = 1
+            for binder_token_index in binder_token_indices:
+                if contact_token_index == binder_token_index:
+                    continue
+                disto_cond[contact_token_index, binder_token_index] = 0
+                disto_cond[binder_token_index, contact_token_index] = 0
+                disto_cond_mask[contact_token_index, binder_token_index] = True
+                disto_cond_mask[binder_token_index, contact_token_index] = True
+
+    return pocket_feature
+
+
 def build_feature_tensors(
     chains: list[ChainInfo],
     tokens: list[TokenInfo],
@@ -1423,8 +1533,10 @@ def build_feature_tensors(
     # experimental coordinates, so atom_resolved_mask is all False.
     # The model uses ref_pos for atom feature embedding.
 
-    # --- Pocket (dropped) ---
-    pocket_feature = torch.zeros(n_tokens, dtype=torch.long)
+    # --- Experimental pocket conditioning ---
+    pocket_feature = apply_pocket_conditioning(
+        input, chains, tokens, disto_cond, disto_cond_mask
+    )
 
     return {
         # Token-level
