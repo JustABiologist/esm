@@ -52,7 +52,11 @@ def _release_torch_memory() -> None:
             pass
 
     mps = getattr(torch, "mps", None)
-    if mps is not None and hasattr(mps, "empty_cache"):
+    if (
+        os.environ.get("ESMFOLD2_DEVICE") == "mps"
+        and mps is not None
+        and hasattr(mps, "empty_cache")
+    ):
         try:
             mps.empty_cache()
         except Exception:
