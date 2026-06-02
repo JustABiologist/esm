@@ -1,0 +1,218 @@
+{
+  "source_pdb_id": "1FKJ",
+  "protein_chain_id": "A",
+  "ligand_chain_id": "L",
+  "ligand_ccd": "FK5",
+  "pdb_contact_residues_1based": [
+    26,
+    36,
+    37,
+    42,
+    46,
+    54,
+    55,
+    56,
+    59,
+    81,
+    82,
+    87,
+    91,
+    99
+  ],
+  "contact_residue_indices_zero_based": [
+    25,
+    35,
+    36,
+    41,
+    45,
+    53,
+    54,
+    55,
+    58,
+    80,
+    81,
+    86,
+    90,
+    98
+  ],
+  "contact_evidence": [
+    {
+      "residue": "TYR",
+      "residue_number_1based": 26,
+      "min_distance_angstrom": 3.48,
+      "protein_atom": "CE2",
+      "ligand_atom": "O4"
+    },
+    {
+      "residue": "PHE",
+      "residue_number_1based": 36,
+      "min_distance_angstrom": 3.41,
+      "protein_atom": "CE1",
+      "ligand_atom": "O4"
+    },
+    {
+      "residue": "ASP",
+      "residue_number_1based": 37,
+      "min_distance_angstrom": 2.78,
+      "protein_atom": "OD2",
+      "ligand_atom": "O6"
+    },
+    {
+      "residue": "ARG",
+      "residue_number_1based": 42,
+      "min_distance_angstrom": 3.69,
+      "protein_atom": "NH2",
+      "ligand_atom": "C36"
+    },
+    {
+      "residue": "PHE",
+      "residue_number_1based": 46,
+      "min_distance_angstrom": 3.65,
+      "protein_atom": "CE2",
+      "ligand_atom": "C4"
+    },
+    {
+      "residue": "GLU",
+      "residue_number_1based": 54,
+      "min_distance_angstrom": 2.69,
+      "protein_atom": "O",
+      "ligand_atom": "O10"
+    },
+    {
+      "residue": "VAL",
+      "residue_number_1based": 55,
+      "min_distance_angstrom": 3.14,
+      "protein_atom": "CA",
+      "ligand_atom": "O2"
+    },
+    {
+      "residue": "ILE",
+      "residue_number_1based": 56,
+      "min_distance_angstrom": 2.8,
+      "protein_atom": "N",
+      "ligand_atom": "O2"
+    },
+    {
+      "residue": "TRP",
+      "residue_number_1based": 59,
+      "min_distance_angstrom": 3.45,
+      "protein_atom": "CE2",
+      "ligand_atom": "C3"
+    },
+    {
+      "residue": "ALA",
+      "residue_number_1based": 81,
+      "min_distance_angstrom": 3.64,
+      "protein_atom": "O",
+      "ligand_atom": "C45"
+    },
+    {
+      "residue": "TYR",
+      "residue_number_1based": 82,
+      "min_distance_angstrom": 2.76,
+      "protein_atom": "OH",
+      "ligand_atom": "O3"
+    },
+    {
+      "residue": "HIS",
+      "residue_number_1based": 87,
+      "min_distance_angstrom": 3.65,
+      "protein_atom": "NE2",
+      "ligand_atom": "C12"
+    },
+    {
+      "residue": "ILE",
+      "residue_number_1based": 91,
+      "min_distance_angstrom": 3.62,
+      "protein_atom": "CD1",
+      "ligand_atom": "C35"
+    },
+    {
+      "residue": "PHE",
+      "residue_number_1based": 99,
+      "min_distance_angstrom": 3.58,
+      "protein_atom": "CE2",
+      "ligand_atom": "O4"
+    }
+  ],
+  "expected_cleaned_input": {
+    "pocket": {
+      "binder_chain_id": "L",
+      "contacts": [
+        [
+          "A",
+          25
+        ],
+        [
+          "A",
+          35
+        ],
+        [
+          "A",
+          36
+        ],
+        [
+          "A",
+          41
+        ],
+        [
+          "A",
+          45
+        ],
+        [
+          "A",
+          53
+        ],
+        [
+          "A",
+          54
+        ],
+        [
+          "A",
+          55
+        ],
+        [
+          "A",
+          58
+        ],
+        [
+          "A",
+          80
+        ],
+        [
+          "A",
+          81
+        ],
+        [
+          "A",
+          86
+        ],
+        [
+          "A",
+          90
+        ],
+        [
+          "A",
+          98
+        ]
+      ]
+    }
+  },
+  "expected_feature_behavior": {
+    "required_feature_keys": [
+      "pocket_feature",
+      "disto_cond",
+      "disto_cond_mask"
+    ],
+    "pocket_feature_must_be_nonzero_on_contact_residue_tokens": true,
+    "disto_cond_mask_must_have_contact_residue_to_ligand_pairs": true,
+    "inputs_without_pocket_must_have_zero_pocket_feature": true
+  },
+  "expected_inference_behavior": {
+    "local_only": true,
+    "model_id_default": "biohub/ESMFold2",
+    "output_format": "mmCIF",
+    "mmcif_must_contain_ligand_ccd": "FK5",
+    "mmcif_must_contain_atom_site_loop": true
+  }
+}

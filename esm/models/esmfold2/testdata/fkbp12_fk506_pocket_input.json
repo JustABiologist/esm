@@ -1,0 +1,93 @@
+{
+  "metadata": {
+    "source_pdb_id": "1FKJ",
+    "source_title": "ATOMIC STRUCTURE OF FKBP12-FK506, AN IMMUNOPHILIN IMMUNOSUPPRESSANT COMPLEX",
+    "resolution_angstrom": 1.7,
+    "protein_chain_id": "A",
+    "ligand_chain_id": "L",
+    "ligand_ccd": "FK5",
+    "ligand_name": "8-DEETHYL-8-[BUT-3-ENYL]-ASCOMYCIN",
+    "contact_indexing": "zero_based_sequence_residue_indices",
+    "contact_definition": "Non-hydrogen protein-ligand atom distance <= 4.0 A in RCSB 1FKJ coordinates."
+  },
+  "structure_prediction_input": {
+    "sequences": [
+      {
+        "type": "protein",
+        "id": "A",
+        "sequence": "GVQVETISPGDGRTFPKRGQTCVVHYTGMLEDGKKFDSSRDRNKPFKFMLGKQEVIRGWEEGVAQMSVGQRAKLTISPDYAYGATGHPGIIPPHATLVFDVELLKLE",
+        "msa": null
+      },
+      {
+        "type": "ligand",
+        "id": "L",
+        "smiles": null,
+        "ccd": [
+          "FK5"
+        ]
+      }
+    ],
+    "pocket": {
+      "binder_chain_id": "L",
+      "contacts": [
+        [
+          "A",
+          25
+        ],
+        [
+          "A",
+          35
+        ],
+        [
+          "A",
+          36
+        ],
+        [
+          "A",
+          41
+        ],
+        [
+          "A",
+          45
+        ],
+        [
+          "A",
+          53
+        ],
+        [
+          "A",
+          54
+        ],
+        [
+          "A",
+          55
+        ],
+        [
+          "A",
+          58
+        ],
+        [
+          "A",
+          80
+        ],
+        [
+          "A",
+          81
+        ],
+        [
+          "A",
+          86
+        ],
+        [
+          "A",
+          90
+        ],
+        [
+          "A",
+          98
+        ]
+      ]
+    }
+  }
+}
+
